@@ -1,0 +1,14 @@
+[package]
+name = "flat-hash-map"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dev-dependencies]
+rand = "0.9.0-alpha.2"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "append_and_remove"
+harness = false
