@@ -29,6 +29,7 @@ macro_rules! comp_asserts {
 }
 
 // TODO: dealloc empty chunks
+// TODO: auto realloc to increase buckets
 
 const DEFAULT_BUCKETS: usize = 128;
 const BUCKET_CHUNK_LEN: usize = 16;
@@ -55,7 +56,10 @@ impl<K: Hash + PartialOrd, V, S: BuildHasher> FlatHashMap<K, V, S> {
     }
 
     fn compute_bucket(&self, hash: u64) -> usize {
-        ((hash - 1) as usize) % self.num_buckets
+        if self.num_buckets == 0 {
+            unreachable!();        
+        }
+        ((hash - 1) as usize) % (self.num_buckets)
     }
 
     fn fix_hash(hash: u64) -> u64 {
@@ -140,29 +144,19 @@ impl<K: Hash + PartialOrd, V, S: BuildHasher> FlatHashMap<K, V, S> {
 
         let bucket = self.compute_bucket(hash);
 
-        /*
-        for chunk in 0..self.num_chunks {
-            for item in 0..Self::BUCKET_CHUNK_LEN {
-                let idx = self.compute_idx(bucket, chunk, item);
-                if self.hashes[idx] == hash && unsafe { *self.keys[idx].as_ptr() == *key } {
-                    return Some(idx);
-                }
-            }
-        }*/
-
         let mut first = None;
         for chunk in 0..self.num_chunks {
             let idx_begin = self.compute_idx(bucket, chunk, 0);
             
             let mut where_hash_eq: BucketChunkBools = 0;
             for item in 0..BUCKET_CHUNK_LEN {
-                let idx = idx_begin + item;
-                where_hash_eq |= (if self.hashes[idx] == hash { 1 } else { 0 }) << item;
+                let idx = idx_begin.wrapping_add(item);
+                where_hash_eq |= (if unsafe { *self.hashes.get_unchecked(idx) } == hash { 1 } else { 0 }) << item;
             }
             
             if where_hash_eq != 0 {
                 if let Some(first_match_idx) = first {
-                    if unsafe { *self.keys[first_match_idx as usize].as_ptr() == *key } {
+                    if unsafe { *(*self.keys.get_unchecked(first_match_idx as usize)).as_ptr() == *key } {
                         return Some(first_match_idx);
                     }
                     first = None;
@@ -171,8 +165,9 @@ impl<K: Hash + PartialOrd, V, S: BuildHasher> FlatHashMap<K, V, S> {
                 let ones = where_hash_eq.count_ones();
                 if ones > 1 {
                     for item in 0..BUCKET_CHUNK_LEN {
-                        let idx = idx_begin + item;
-                        if (where_hash_eq & (1 << item)) != 0 && unsafe { *self.keys[idx].as_ptr() == *key } {
+                        let idx = idx_begin.wrapping_add(item);
+                        let keyptr = unsafe { (*self.keys.get_unchecked(idx)).as_ptr() };
+                        if (where_hash_eq & (1 << item)) != 0 && unsafe { *keyptr == *key } {
                             return Some(idx);
                         }
                     }
@@ -184,7 +179,7 @@ impl<K: Hash + PartialOrd, V, S: BuildHasher> FlatHashMap<K, V, S> {
         }
 
         if let Some(first_match_idx) = first {
-            if unsafe { *self.keys[first_match_idx as usize].as_ptr() == *key } {
+            if unsafe { *(*self.keys.get_unchecked(first_match_idx)).as_ptr() == *key } {
                 return Some(first_match_idx);
             }
         }
@@ -352,23 +347,11 @@ impl<K: Hash + PartialOrd + Debug, V: Debug, H: BuildHasher> Debug for FlatHashM
     }
 }
 
-impl<K: Hash + PartialOrd, V> FromIterator<(K, V)> for FlatHashMap<K, V> {
-    fn from_iter<T: IntoIterator<Item=(K, V)>>(iter: T) -> Self {
-        let mut x = Self::default();
-        x.extend(iter);
-        x
-    }
-}
-
 impl<K: Hash + PartialOrd, V, H: BuildHasher> Index<&K> for FlatHashMap<K, V, H> {
     type Output = V;
     fn index(&self, key: &K) -> &Self::Output {
         self.get(key).unwrap()
     }
-}
-
-pub fn ignore(map: FlatHashMap<String, usize>, search: String) -> usize {
-    *map.get(&search).unwrap()
 }
 
 #[cfg(test)]
@@ -406,3 +389,4 @@ mod tests {
         assert_eq!(map.count(), 0);
     }
 }
+
